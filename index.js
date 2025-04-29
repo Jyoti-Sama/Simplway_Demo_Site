@@ -3,173 +3,187 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const net = require('net');
 
-const creds = require('./gs_creds.json.json');
+// Get credentials from environment variables
+const creds = {
+    type: process.env.type,
+    project_id: process.env.project_id,
+    private_key_id: process.env.private_key_id,
+    private_key: process.env.private_key,
+    client_email: process.env.client_email,
+    client_id: process.env.client_id,
+    auth_uri: process.env.auth_uri,
+    token_uri: process.env.token_uri,
+    auth_provider_x509_cert_url: process.env.auth_provider_x509_cert_url,
+    client_x509_cert_url: process.env.client_x509_cert_url,
+    universe_domain: process.env.universe_domain
+};
+
 const app = express();
 const DEFAULT_PORT = 3000;
 
 // Function to find an available port
 function findAvailablePort(startPort) {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on('error', (err) => {
-      if (err.code === 'EADDRINUSE') {
-        // Port is in use, try the next one
-        resolve(findAvailablePort(startPort + 1));
-      } else {
-        reject(err);
-      }
+    return new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.unref();
+        server.on('error', (err) => {
+            if (err.code === 'EADDRINUSE') {
+                // Port is in use, try the next one
+                resolve(findAvailablePort(startPort + 1));
+            } else {
+                reject(err);
+            }
+        });
+        server.listen(startPort, () => {
+            server.close(() => {
+                resolve(startPort);
+            });
+        });
     });
-    server.listen(startPort, () => {
-      server.close(() => {
-        resolve(startPort);
-      });
-    });
-  });
 }
 
 // sheet setup
-const SHEET_ID = '1ne-SAxZzKdwrGwOyRetCcV1YG-AUZQL8LPbRNWcaXV8';
+const SHEET_ID = process.env.GOOGLE_SHEETS_ID;
 const auth = new JWT({
-  email: creds.client_email,
-  key: creds.private_key,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    email: creds.client_email,
+    key: creds.private_key,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 const doc = new GoogleSpreadsheet(SHEET_ID, auth);
 let sheet1;
 let sheet2;
 
 async function initSheets() {
-  try {
-    console.log('Initializing sheets...');
-    await doc.loadInfo();
-    console.log('Document loaded:', doc.title);
-    
-    sheet1 = doc.sheetsByIndex[0];
-    console.log('Sheet1 loaded:', sheet1.title);
-    
-    sheet2 = doc.sheetsByIndex[1];
-    if (!sheet2) {
-      console.log('Creating Sheet2...');
-      sheet2 = await doc.addSheet({
-        headerValues: ['Account__c', 'Date__c', 'Service__c', 'Usage_Amount__c']
-      });
-      console.log('Sheet2 created:', sheet2.title);
-    } else {
-      console.log('Sheet2 loaded:', sheet2.title);
+    try {
+        console.log('Initializing sheets...');
+        await doc.loadInfo();
+        console.log('Document loaded:', doc.title);
+
+        sheet1 = doc.sheetsByIndex[0];
+        console.log('Sheet1 loaded:', sheet1.title);
+
+        sheet2 = doc.sheetsByIndex[1];
+        if (!sheet2) {
+            console.log('Creating Sheet2...');
+            sheet2 = await doc.addSheet({
+                headerValues: ['Account__c', 'Date__c', 'Service__c', 'Usage_Amount__c']
+            });
+            console.log('Sheet2 created:', sheet2.title);
+        } else {
+            console.log('Sheet2 loaded:', sheet2.title);
+        }
+
+        // Load header rows to ensure they exist
+        await sheet1.loadHeaderRow();
+        if (sheet2) {
+            await sheet2.loadHeaderRow();
+        }
+
+        console.log('Sheets initialized successfully');
+    } catch (err) {
+        console.error('Error initializing sheets:', err);
+        throw err;
     }
-    
-    // Load header rows to ensure they exist
-    await sheet1.loadHeaderRow();
-    if (sheet2) {
-      await sheet2.loadHeaderRow();
-    }
-    
-    console.log('Sheets initialized successfully');
-  } catch (err) {
-    console.error('Error initializing sheets:', err);
-    throw err;
-  }
 }
 
 // Initialize sheets
 initSheets().catch(err => {
-  console.error('Failed to initialize sheets:', err);
+    console.error('Failed to initialize sheets:', err);
 });
 
 app.use(express.json());
 
 app.post('/api/opportunity-update', async (req, res) => {
-  try {
-    if (!sheet1) {
-      throw new Error('Sheet not initialized');
-    }
+    try {
+        if (!sheet1) {
+            throw new Error('Sheet not initialized');
+        }
 
-    const update = req.body;
-    console.log('Received update:', update);
-    
-    const rows = await sheet1.getRows();
-    console.log('Found rows:', rows.length);
-    
-    // Find existing row with matching accountId and productCode
-    const existingRow = rows.find(row => 
-      row.get('accountId') === update.accountId && 
-      row.get('productCode') === update.productCode
-    );
+        const update = req.body;
+        console.log('Received update:', update);
 
-    if (existingRow) {
-      console.log('Updating existing row');
-      // Update existing row
-      Object.assign(existingRow, {
-        ...update,
-        receivedAt: new Date().toISOString()
-      });
-      await existingRow.save();
-      res.json({ received: true, savedToSheet: true, updated: true });
-    } else {
-      console.log('Adding new row');
-      // Add new row
-      await sheet1.addRow({
-        ...update,
-        receivedAt: new Date().toISOString()
-      });
-      res.json({ received: true, savedToSheet: true, updated: false });
+        const rows = await sheet1.getRows();
+        console.log('Found rows:', rows.length);
+
+        // Find existing row with matching accountId and productCode
+        const existingRow = rows.find(row =>
+            row.get('accountId') === update.accountId &&
+            row.get('productCode') === update.productCode
+        );
+
+        if (existingRow) {
+            console.log('Updating existing row');
+            // Update existing row
+            Object.assign(existingRow, {
+                ...update,
+                receivedAt: new Date().toISOString()
+            });
+            await existingRow.save();
+            res.json({ received: true, savedToSheet: true, updated: true });
+        } else {
+            console.log('Adding new row');
+            // Add new row
+            await sheet1.addRow({
+                ...update,
+                receivedAt: new Date().toISOString()
+            });
+            res.json({ received: true, savedToSheet: true, updated: false });
+        }
+    } catch (err) {
+        console.error('Error in /api/opportunity-update:', err);
+        res.status(500).json({
+            received: true,
+            savedToSheet: false,
+            error: err instanceof Error ? err.message : 'Unknown error'
+        });
     }
-  } catch (err) {
-    console.error('Error in /api/opportunity-update:', err);
-    res.status(500).json({
-      received: true,
-      savedToSheet: false,
-      error: err instanceof Error ? err.message : 'Unknown error'
-    });
-  }
 });
 
 app.get('/api/create-usage-records', async (req, res) => {
-  try {
-    if (!sheet1 || !sheet2) {
-      throw new Error('Sheets not initialized');
+    try {
+        if (!sheet1 || !sheet2) {
+            throw new Error('Sheets not initialized');
+        }
+
+        const rows = await sheet1.getRows();
+        console.log('Found rows:', rows.length);
+
+        for (const row of rows) {
+            const accountId = row.get('accountId');
+            const productCode = row.get('productCode');
+            const receivedAt = row.get('receivedAt');
+
+            console.log('Row values:', { accountId, productCode, receivedAt });
+        }
+
+        // for (const row of rows) {
+        //   const accountId = row.get('accountId');
+
+        //   // Create usage records for each service type
+        //   const services = ['Browser', 'API', 'Pipeline'];
+        //   for (const service of services) {
+        //     await sheet2.addRow({
+        //       Account__c: accountId,
+        //       Date__c: new Date().toISOString(),
+        //       Service__c: service,
+        //       Usage_Amount__c: Math.floor(Math.random() * 100)
+        //     });
+        //   }
+        // }
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Error in /api/create-usage-records:', err);
+        res.status(500).json({
+            success: false,
+            error: err instanceof Error ? err.message : 'Unknown error'
+        });
     }
-
-    const rows = await sheet1.getRows();
-    console.log('Found rows:', rows.length);
-    
-    for(const row of rows) {
-      const accountId = row.get('accountId');
-      const productCode = row.get('productCode');
-      const receivedAt = row.get('receivedAt');
-      
-      console.log('Row values:', { accountId, productCode, receivedAt });
-    }    
-
-    // for (const row of rows) {
-    //   const accountId = row.get('accountId');
-      
-    //   // Create usage records for each service type
-    //   const services = ['Browser', 'API', 'Pipeline'];
-    //   for (const service of services) {
-    //     await sheet2.addRow({
-    //       Account__c: accountId,
-    //       Date__c: new Date().toISOString(),
-    //       Service__c: service,
-    //       Usage_Amount__c: Math.floor(Math.random() * 100)
-    //     });
-    //   }
-    // }
-    
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Error in /api/create-usage-records:', err);
-    res.status(500).json({ 
-      success: false, 
-      error: err instanceof Error ? err.message : 'Unknown error' 
-    });
-  }
 });
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', sheetsInitialized: !!sheet1 && !!sheet2 });
+    res.json({ status: 'ok', sheetsInitialized: !!sheet1 && !!sheet2 });
 });
 
 // Export the Express API

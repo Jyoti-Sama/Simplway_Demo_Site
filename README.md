@@ -36,22 +36,46 @@ npm install
 3. Set up Google Sheets credentials:
    - Create a service account in Google Cloud Console
    - Download the credentials JSON file
-   - Rename it to `gs_creds.json.json`
-   - Place it in the project root directory
-
-4. Configure Google Sheet:
-   - Create a new Google Sheet
-   - Share it with your service account email
-   - Copy the Sheet ID from the URL
-   - Update the `SHEET_ID` in `index.js`
+   - For local development:
+     - Rename it to `gs_creds.json.json`
+     - Place it in the project root directory
+   - For Vercel deployment:
+     - Open the JSON file
+     - Copy the following values:
+       - `client_email`
+       - `private_key`
+       - Your Google Sheet ID
 
 ## Environment Variables
 
 The following environment variables are required:
 
-- `GOOGLE_SHEETS_ID`: Your Google Sheet ID
-- `GOOGLE_SERVICE_ACCOUNT_EMAIL`: Service account email
-- `GOOGLE_PRIVATE_KEY`: Service account private key
+### Local Development
+Create a `.env` file in the project root:
+```env
+GOOGLE_SHEETS_ID=your_sheet_id
+GOOGLE_SERVICE_ACCOUNT_EMAIL=your_service_account_email
+GOOGLE_PRIVATE_KEY=your_private_key
+```
+
+### Vercel Deployment
+1. Go to your project in the Vercel dashboard
+2. Click on "Settings"
+3. Click on "Environment Variables"
+4. Add the following variables:
+   - `GOOGLE_SHEETS_ID`: Your Google Sheet ID
+   - `GOOGLE_SERVICE_ACCOUNT_EMAIL`: Service account email from the JSON file
+   - `GOOGLE_PRIVATE_KEY`: Private key from the JSON file (including the `-----BEGIN PRIVATE KEY-----` and `-----END PRIVATE KEY-----` parts)
+
+Note: For the `GOOGLE_PRIVATE_KEY`, make sure to:
+- Copy the entire private key including the BEGIN and END markers
+- Replace all newlines with `\n`
+- Enclose the entire value in quotes
+
+Example:
+```env
+GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDNBPxjGvBrpYbw\n...\n-----END PRIVATE KEY-----\n"
+```
 
 ## API Endpoints
 
@@ -117,7 +141,8 @@ simplway-server/
 ├── index.js           # Main server file
 ├── vercel.json        # Vercel configuration
 ├── package.json       # Project dependencies
-├── gs_creds.json.json # Google Sheets credentials
+├── .env              # Local environment variables (not in git)
+├── gs_creds.json.json # Google Sheets credentials (not in git)
 └── README.md         # This file
 ```
 
