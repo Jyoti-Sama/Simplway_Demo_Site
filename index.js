@@ -8,7 +8,7 @@ const creds = {
     type: process.env.type,
     project_id: process.env.project_id,
     private_key_id: process.env.private_key_id,
-    private_key: process.env.private_key,
+    private_key: process.env.private_key?.replace(/\\n/g, '\n'),
     client_email: process.env.client_email,
     client_id: process.env.client_id,
     auth_uri: process.env.auth_uri,
@@ -44,70 +44,88 @@ function findAvailablePort(startPort) {
 
 // sheet setup
 const SHEET_ID = process.env.GOOGLE_SHEETS_ID;
-const auth = new JWT({
-    email: creds.client_email,
-    key: creds.private_key,
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
-const doc = new GoogleSpreadsheet(SHEET_ID, auth);
+let doc;
 let sheet1;
 let sheet2;
 
 async function initSheets() {
     try {
-        console.log('Initializing sheets...');
-        await doc.loadInfo();
-        console.log('Document loaded:', doc.title);
-
-        sheet1 = doc.sheetsByIndex[0];
-        console.log('Sheet1 loaded:', sheet1.title);
-
-        sheet2 = doc.sheetsByIndex[1];
-        if (!sheet2) {
-            console.log('Creating Sheet2...');
-            sheet2 = await doc.addSheet({
-                headerValues: ['Account__c', 'Date__c', 'Service__c', 'Usage_Amount__c']
+        if (!doc) {
+            console.log('Initializing Google Sheets connection...');
+            const auth = new JWT({
+                email: creds.client_email,
+                key: creds.private_key,
+                scopes: ['https://www.googleapis.com/auth/spreadsheets'],
             });
-            console.log('Sheet2 created:', sheet2.title);
-        } else {
-            console.log('Sheet2 loaded:', sheet2.title);
+            doc = new GoogleSpreadsheet(SHEET_ID, auth);
         }
 
-        // Load header rows to ensure they exist
-        await sheet1.loadHeaderRow();
-        if (sheet2) {
-            await sheet2.loadHeaderRow();
+        if (!sheet1 || !sheet2) {
+            console.log('Loading sheet information...');
+            await doc.loadInfo();
+            console.log('Document loaded:', doc.title);
+            
+            sheet1 = doc.sheetsByIndex[0];
+            console.log('Sheet1 loaded:', sheet1.title);
+            
+            sheet2 = doc.sheetsByIndex[1];
+            if (!sheet2) {
+                console.log('Creating Sheet2...');
+                sheet2 = await doc.addSheet({
+                    headerValues: ['Account__c', 'Date__c', 'Service__c', 'Usage_Amount__c']
+                });
+                console.log('Sheet2 created:', sheet2.title);
+            } else {
+                console.log('Sheet2 loaded:', sheet2.title);
+            }
+            
+            // Load header rows to ensure they exist
+            await sheet1.loadHeaderRow();
+            if (sheet2) {
+                await sheet2.loadHeaderRow();
+            }
         }
-
+        
         console.log('Sheets initialized successfully');
+        return true;
     } catch (err) {
         console.error('Error initializing sheets:', err);
-        throw err;
+        return false;
     }
 }
 
-// Initialize sheets
+// Initialize sheets on server start
 initSheets().catch(err => {
     console.error('Failed to initialize sheets:', err);
 });
 
 app.use(express.json());
 
-app.post('/api/opportunity-update', async (req, res) => {
-    try {
-        if (!sheet1) {
-            throw new Error('Sheet not initialized');
+// Middleware to ensure sheets are initialized
+async function ensureSheetsInitialized(req, res, next) {
+    if (!sheet1 || !sheet2) {
+        const initialized = await initSheets();
+        if (!initialized) {
+            return res.status(500).json({
+                success: false,
+                error: 'Failed to initialize Google Sheets connection'
+            });
         }
+    }
+    next();
+}
 
+app.post('/api/opportunity-update', ensureSheetsInitialized, async (req, res) => {
+    try {
         const update = req.body;
         console.log('Received update:', update);
-
+        
         const rows = await sheet1.getRows();
         console.log('Found rows:', rows.length);
-
+        
         // Find existing row with matching accountId and productCode
-        const existingRow = rows.find(row =>
-            row.get('accountId') === update.accountId &&
+        const existingRow = rows.find(row => 
+            row.get('accountId') === update.accountId && 
             row.get('productCode') === update.productCode
         );
 
@@ -139,26 +157,22 @@ app.post('/api/opportunity-update', async (req, res) => {
     }
 });
 
-app.get('/api/create-usage-records', async (req, res) => {
+app.get('/api/create-usage-records', ensureSheetsInitialized, async (req, res) => {
     try {
-        if (!sheet1 || !sheet2) {
-            throw new Error('Sheets not initialized');
-        }
-
         const rows = await sheet1.getRows();
         console.log('Found rows:', rows.length);
-
+        
         for (const row of rows) {
             const accountId = row.get('accountId');
             const productCode = row.get('productCode');
             const receivedAt = row.get('receivedAt');
-
+            
             console.log('Row values:', { accountId, productCode, receivedAt });
-        }
+        }    
 
         // for (const row of rows) {
         //   const accountId = row.get('accountId');
-
+        //   
         //   // Create usage records for each service type
         //   const services = ['Browser', 'API', 'Pipeline'];
         //   for (const service of services) {
@@ -170,20 +184,35 @@ app.get('/api/create-usage-records', async (req, res) => {
         //     });
         //   }
         // }
-
+        
         res.json({ success: true });
     } catch (err) {
         console.error('Error in /api/create-usage-records:', err);
-        res.status(500).json({
-            success: false,
-            error: err instanceof Error ? err.message : 'Unknown error'
+        res.status(500).json({ 
+            success: false, 
+            error: err instanceof Error ? err.message : 'Unknown error' 
         });
     }
 });
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', sheetsInitialized: !!sheet1 && !!sheet2 });
+app.get('/api/health', async (req, res) => {
+    try {
+        const initialized = await initSheets();
+        res.json({ 
+            status: 'ok', 
+            sheetsInitialized: initialized,
+            sheets: {
+                sheet1: sheet1?.title,
+                sheet2: sheet2?.title
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ 
+            status: 'error', 
+            error: err instanceof Error ? err.message : 'Unknown error'
+        });
+    }
 });
 
 // Export the Express API
